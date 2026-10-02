@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="峻爸 AI Transcriber"
+           Language="1028"
+           Version="3.5.0.0"
+           Manufacturer="峻爸"
+           UpgradeCode="A2C0B6B1-8B54-4D6E-9F29-3F63A7BBEA51">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" Platform="x64" />
+    <MajorUpgrade DowngradeErrorMessage="已安裝較新的峻爸 AI Transcriber。" />
+    <MediaTemplate EmbedCab="yes" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="Junba AI Transcriber" />
+      </Directory>
+    </Directory>
+    <Feature Id="MainFeature" Title="峻爸 AI Transcriber" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Product>
+</Wix>

@@ -1,0 +1,13 @@
+峻爸 AI Transcriber v3.5｜安全發佈／低誤判封裝版
+
+本版核心功能沿用 v3.4，封裝流程重新設計：
+1. 主力改為 PyInstaller onedir Portable，不再以 one-file EXE 為主要發佈格式。
+2. EXE 加入 Windows 版本資訊與 asInvoker manifest。
+3. UPX 維持停用，不做壓縮殼、混淆或規避安全軟體的處理。
+4. GitHub Actions 新增 MSI 安裝版（WiX Toolset）。
+5. GitHub Actions 新增可選 Authenticode Code Signing：若 Repository 提供 PFX 簽章憑證 Secrets，會自動簽署 EXE 與 MSI並驗證簽章。
+6. 產出 SHA256SUMS、BUILD_INFO、Python dependency list。
+7. Portable ZIP 與 MSI 都建立 GitHub build provenance attestation。
+8. 不再預設產生 Single EXE，降低 PyInstaller one-file 類型常見的防毒誤判風險。
+
+注意：未簽章版本仍可能被 Chrome / SmartScreen / Defender 警告，無法用技術手段合法保證完全不被攔截。要大幅降低警告，建議使用受信任的 Authenticode Code Signing 憑證。

@@ -1,0 +1,12 @@
+峻爸 AI Transcriber v3.4｜GitHub Windows 建置
+
+1. ZIP 解壓後，將「裡面的內容」放到 GitHub Repository 根目錄。
+2. 根目錄應直接看到：main.py、requirements.txt、app、.github。
+3. Workflow 必須位於：.github/workflows/build-windows-v3.4.yml
+4. GitHub → Actions → Build Windows EXE v3.4 → Run workflow。
+5. Intel GPU/NPU/OpenVINO 建議先下載 Portable Artifact：
+   Junba-AI-Transcriber-v3.4-Portable-Windows-x64
+6. 單檔版：
+   Junba-AI-Transcriber-v3.4-Single-EXE-Windows-x64
+
+提醒：不要把 .github 資料夾改名，也不要建立「.github →」這類含箭頭的資料夾名稱。

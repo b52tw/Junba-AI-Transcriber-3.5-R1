@@ -1,0 +1,189 @@
+name: Build Windows v3.5 Safe Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**.py'
+      - '**.spec'
+      - 'requirements.txt'
+      - 'packaging/**'
+      - '.github/workflows/build-windows-v3.5.yml'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    env:
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+          python -m pip check
+
+      - name: Source validation
+        shell: pwsh
+        run: |
+          python -m compileall -q main.py app tests
+          pytest -q tests
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          python main.py --ui-self-test "$pwd/UI_SELFTEST_SOURCE.txt"
+          if (-not (Select-String -Path "$pwd/UI_SELFTEST_SOURCE.txt" -Pattern 'UI_SELFTEST_OK' -Quiet)) { throw 'Source UI self-test failed' }
+
+      - name: Build portable onedir version
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean JunbaAITranscriber_portable.spec
+          $exe = "$pwd/dist/Junba_AI_Transcriber_v3.5_Portable/Junba_AI_Transcriber_v3.5.exe"
+          if (!(Test-Path $exe)) { throw 'Portable EXE not found' }
+
+      - name: Portable executable self-tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $exe = "$pwd/dist/Junba_AI_Transcriber_v3.5_Portable/Junba_AI_Transcriber_v3.5.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList '--windowed-io-self-test', "$pwd/release/WINDOWED_IO_PORTABLE.txt" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Portable windowed I/O self-test failed' }
+          $p = Start-Process -FilePath $exe -ArgumentList '--self-test', "$pwd/release/SELFTEST_PORTABLE.txt" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Portable self-test failed' }
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $p = Start-Process -FilePath $exe -ArgumentList '--ui-self-test', "$pwd/release/UI_SELFTEST_PORTABLE.txt" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Portable UI self-test failed' }
+
+      - name: Detect optional Authenticode certificate
+        id: signing
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) {
+            'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host 'No code-signing certificate configured. Building unsigned release.'
+            exit 0
+          }
+          [IO.File]::WriteAllBytes("$pwd/release/codesign.pfx", [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          'enabled=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host 'Code-signing certificate restored.'
+
+      - name: Sign main portable EXE
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $exe = "$pwd/dist/Junba_AI_Transcriber_v3.5_Portable/Junba_AI_Transcriber_v3.5.exe"
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f "$pwd/release/codesign.pfx" /p "$env:WINDOWS_CERT_PASSWORD" $exe
+          if ($LASTEXITCODE -ne 0) { throw 'EXE signing failed' }
+          & $signtool.FullName verify /pa /v $exe
+          if ($LASTEXITCODE -ne 0) { throw 'EXE signature verification failed' }
+
+      - name: Build MSI installer with WiX
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+          $wix = Get-ChildItem "${env:ProgramFiles(x86)}" -Directory -Filter 'WiX Toolset v3*' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wix) { throw 'WiX Toolset v3 not found after installation' }
+          $heat = Join-Path $wix.FullName 'bin\heat.exe'
+          $candle = Join-Path $wix.FullName 'bin\candle.exe'
+          $light = Join-Path $wix.FullName 'bin\light.exe'
+          $src = "$pwd\dist\Junba_AI_Transcriber_v3.5_Portable"
+          New-Item -ItemType Directory -Force -Path obj | Out-Null
+          & $heat dir $src -cg AppFiles -dr INSTALLFOLDER -srd -sfrag -gg -var var.SourceDir -out "$pwd\packaging\Files.wxs"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX heat failed' }
+          & $candle -nologo -arch x64 "-dSourceDir=$src" -out "$pwd\obj\" "$pwd\packaging\Product.wxs" "$pwd\packaging\Files.wxs"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed' }
+          & $light -nologo -sval -out "$pwd\release\Junba_AI_Transcriber_v3.5_Windows_x64.msi" "$pwd\obj\Product.wixobj" "$pwd\obj\Files.wixobj"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX light failed' }
+
+      - name: Sign MSI installer
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          $msi = "$pwd/release/Junba_AI_Transcriber_v3.5_Windows_x64.msi"
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f "$pwd/release/codesign.pfx" /p "$env:WINDOWS_CERT_PASSWORD" $msi
+          if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed' }
+          & $signtool.FullName verify /pa /v $msi
+          if ($LASTEXITCODE -ne 0) { throw 'MSI signature verification failed' }
+
+      - name: Package portable and generate hashes
+        shell: pwsh
+        run: |
+          $portable = "$pwd/release/Junba_AI_Transcriber_v3.5_Portable_Windows_x64.zip"
+          Compress-Archive -Path "$pwd/dist/Junba_AI_Transcriber_v3.5_Portable/*" -DestinationPath $portable -Force
+          $exe = "$pwd/dist/Junba_AI_Transcriber_v3.5_Portable/Junba_AI_Transcriber_v3.5.exe"
+          $msi = "$pwd/release/Junba_AI_Transcriber_v3.5_Windows_x64.msi"
+          $signed = '${{ steps.signing.outputs.enabled }}'
+          @(
+            "EXE  $((Get-FileHash $exe -Algorithm SHA256).Hash)  Junba_AI_Transcriber_v3.5.exe",
+            "ZIP  $((Get-FileHash $portable -Algorithm SHA256).Hash)  Junba_AI_Transcriber_v3.5_Portable_Windows_x64.zip",
+            "MSI  $((Get-FileHash $msi -Algorithm SHA256).Hash)  Junba_AI_Transcriber_v3.5_Windows_x64.msi"
+          ) | Set-Content "$pwd/release/SHA256SUMS.txt" -Encoding UTF8
+          python -m pip freeze | Set-Content "$pwd/release/PYTHON_DEPENDENCIES.txt" -Encoding UTF8
+          @"
+          峻爸 AI Transcriber v3.5 Safe Release
+          Build: GitHub Actions windows-latest / Python 3.11 x64
+          PyInstaller mode: onedir (no UPX)
+          Windows manifest: asInvoker
+          Authenticode signed: $signed
+          Portable ZIP and MSI are the primary release formats.
+          This build does not use techniques intended to bypass browser, Defender, or SmartScreen protections.
+          "@ | Set-Content "$pwd/release/BUILD_INFO.txt" -Encoding UTF8
+          if (Test-Path "$pwd/release/codesign.pfx") { Remove-Item "$pwd/release/codesign.pfx" -Force }
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Junba-AI-Transcriber-v3.5-MSI-Windows-x64
+          path: |
+            release/Junba_AI_Transcriber_v3.5_Windows_x64.msi
+            release/SHA256SUMS.txt
+            release/BUILD_INFO.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload portable release
+        uses: actions/upload-artifact@v4
+        with:
+          name: Junba-AI-Transcriber-v3.5-Portable-Windows-x64
+          path: |
+            release/Junba_AI_Transcriber_v3.5_Portable_Windows_x64.zip
+            release/SHA256SUMS.txt
+            release/BUILD_INFO.txt
+            release/PYTHON_DEPENDENCIES.txt
+            release/SELFTEST_PORTABLE.txt
+            release/UI_SELFTEST_PORTABLE.txt
+            release/WINDOWED_IO_PORTABLE.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attest MSI build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/Junba_AI_Transcriber_v3.5_Windows_x64.msi
+
+      - name: Attest Portable ZIP build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/Junba_AI_Transcriber_v3.5_Portable_Windows_x64.zip

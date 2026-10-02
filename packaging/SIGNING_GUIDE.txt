@@ -1,0 +1,17 @@
+峻爸 AI Transcriber v3.5｜Windows 簽章說明
+
+這版不使用任何「規避 Chrome / Defender / SmartScreen」技巧。
+真正降低誤判最有效的方式是使用受信任的 Windows Authenticode Code Signing 憑證。
+
+GitHub Repository 若設定以下 Actions Secrets：
+- WINDOWS_CERT_PFX_BASE64：PFX 憑證檔的 Base64 內容
+- WINDOWS_CERT_PASSWORD：PFX 密碼
+
+Workflow 會自動：
+1. 還原暫存 PFX
+2. 以 Windows SDK signtool 對主 EXE 簽章
+3. 建立 MSI 後再對 MSI 簽章
+4. 使用 RFC3161 timestamp server 加時間戳
+5. 驗證簽章
+
+沒有這兩個 Secrets 時仍會產生「未簽章」版本，但瀏覽器／SmartScreen 仍可能警告。
